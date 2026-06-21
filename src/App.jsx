@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 
 const STORAGE_KEY = "budget_data_v3";
 
@@ -6,11 +6,11 @@ const CATEGORIES = [
   { id: "food",          label: "🍜 餐飲",  color: "#f97316",
     sub: ["🌅 早餐","☀️ 午餐","🌙 晚餐","🌃 宵夜","🧋 飲料","🍰 點心"] },
   { id: "transport",     label: "🚌 交通",  color: "#3b82f6",
-    sub: ["🚇 捷運","🚌 公車","🚕 計程車","🛵 機車","🚲 自行車","✈️ 長途"] },
+    sub: ["🚇 捷運","🚌 公車","🚕 計程車","🛵 機車","🚲 自行車","✈️ 長途","🚆 火車","🚄 高鐵","🚐 客運"] },
   { id: "shopping",      label: "🛍️ 購物",  color: "#ec4899",
     sub: ["👕 衣物","🧴 日用品","📱 3C","📚 書籍","🎁 禮物","🛒 超市"] },
   { id: "entertainment", label: "🎮 娛樂",  color: "#8b5cf6",
-    sub: ["🎬 電影","🎵 音樂","🎮 遊戲","🏃 運動","🎨 興趣","🎉 聚會"] },
+    sub: ["🎬 電影","🎵 音樂","🎮 遊戲","🏃 運動","🎨 興趣","🎉 聚會","🎭 戲劇"] },
   { id: "health",        label: "💊 醫療",  color: "#10b981",
     sub: ["🏥 看診","💊 藥品","🧘 保健","💆 按摩","🦷 牙科","👁️ 眼科"] },
   { id: "other",         label: "📦 其他",  color: "#6b7280", sub: [] },
@@ -41,13 +41,18 @@ export default function App() {
   const [data, setData]                 = useState(defaultData);
   const [page, setPage]                 = useState("home");
   const [form, setForm]                 = useState(emptyForm);
-  const [editId, setEditId]             = useState(null); // null=新增, id=編輯
+  const [editId, setEditId]             = useState(null);
   const [fixedForm, setFixedForm]       = useState({ name:"", amount:"" });
   const [incomeInput, setIncomeInput]   = useState("");
   const [showAddFixed, setShowAddFixed] = useState(false);
   const [budgetInputs, setBudgetInputs] = useState({});
   const [historyMonth, setHistoryMonth] = useState("");
   const [notification, setNotification] = useState(null);
+  const [statsRange, setStatsRange]     = useState("month"); // "month" | "all"
+  const [statsDrill, setStatsDrill]     = useState(null); // { type:"cat"|"pay", id }
+  const [importText, setImportText]     = useState("");
+  const [showImport, setShowImport]     = useState(false);
+  const fileInputRef = useRef(null);
 
   useEffect(() => {
     try {
@@ -95,22 +100,15 @@ export default function App() {
   const getCatInfo = id => CATEGORIES.find(c=>c.id===id)||CATEGORIES[5];
   const getPayInfo = id => PAYMENT_METHODS.find(p=>p.id===id)||PAYMENT_METHODS[0];
 
-  // Open add page (new)
   function openAdd() {
     setForm({...emptyForm, date:toDay()});
     setEditId(null);
     setPage("add");
   }
-
-  // Open edit page with existing tx data
   function openEdit(tx) {
     setForm({
-      amount: String(tx.amount),
-      note: tx.note||"",
-      category: tx.category||"food",
-      sub: tx.sub||"",
-      payment: tx.payment||"cash",
-      date: tx.date||toDay(),
+      amount: String(tx.amount), note: tx.note||"", category: tx.category||"food",
+      sub: tx.sub||"", payment: tx.payment||"cash", date: tx.date||toDay(),
     });
     setEditId(tx.id);
     setPage("add");
@@ -123,14 +121,7 @@ export default function App() {
       category:form.category, sub:form.sub, payment:form.payment, date:form.date };
 
     setData(d => {
-      let txs;
-      if (editId) {
-        // replace existing
-        txs = d.transactions.map(t=>t.id===editId?tx:t);
-      } else {
-        txs = [tx, ...d.transactions];
-      }
-      // sort by date desc
+      let txs = editId ? d.transactions.map(t=>t.id===editId?tx:t) : [tx, ...d.transactions];
       txs.sort((a,b)=>b.date.localeCompare(a.date)||(b.id-a.id));
       return {...d, transactions:txs};
     });
@@ -138,11 +129,9 @@ export default function App() {
     if (!isExcluded(form.payment)) {
       const budget = catBudget(form.category);
       if (budget>0) {
-        // recalc after save (approximate using current catSpent minus old if editing)
         const oldAmt = editId ? (data.transactions.find(t=>t.id===editId)?.amount||0) : 0;
         const newSpent = catSpent(form.category) - oldAmt + amt;
-        const cat = getCatInfo(form.category);
-        const catName = cat.label.split(" ")[1];
+        const catName = getCatInfo(form.category).label.split(" ")[1];
         if (newSpent>budget) notify(`⚠️ ${catName} 預算已超支！`,"error");
         else if (newSpent/budget>=0.8) notify(`注意：${catName} 預算已用 ${Math.round(newSpent/budget*100)}%`,"warn");
         else notify(editId?"已更新！":"已記錄！");
@@ -150,16 +139,12 @@ export default function App() {
     } else {
       notify(editId?"已更新（一銀）":"已記錄（一銀，不計自由金）");
     }
-
     setForm({...emptyForm, date:toDay()});
     setEditId(null);
     setPage("home");
   }
 
-  function deleteTx(id) {
-    setData(d=>({...d, transactions:d.transactions.filter(t=>t.id!==id)}));
-    notify("已刪除");
-  }
+  function deleteTx(id) { setData(d=>({...d, transactions:d.transactions.filter(t=>t.id!==id)})); notify("已刪除"); }
   function addFixed() {
     if (!fixedForm.name||!fixedForm.amount) { notify("請填寫名稱與金額","error"); return; }
     setData(d=>({...d, fixedExpenses:[...d.fixedExpenses,{id:Date.now(),name:fixedForm.name,amount:Number(fixedForm.amount)}]}));
@@ -177,6 +162,68 @@ export default function App() {
     setData(d=>({...d,income:inc,setupDone:true}));
     setPage("home"); notify("設定完成！");
   }
+
+  // ── Export / Import ────────────────────────────────────────────────────────
+  function exportData() {
+    const json = JSON.stringify(data, null, 2);
+    try {
+      const blob = new Blob([json], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `記帳備份_${toDay()}.json`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      notify("已匯出備份檔案");
+    } catch {
+      notify("匯出失敗", "error");
+    }
+  }
+  function handleFileImport(e) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      try {
+        const parsed = JSON.parse(ev.target.result);
+        applyImport(parsed);
+      } catch {
+        notify("檔案格式錯誤", "error");
+      }
+    };
+    reader.readAsText(file);
+    e.target.value = "";
+  }
+  function applyImport(parsed) {
+    if (!parsed || typeof parsed !== "object" || !Array.isArray(parsed.transactions)) {
+      notify("資料格式不正確","error"); return;
+    }
+    const merged = { ...defaultData, ...parsed, budgets: parsed.budgets||{} };
+    setData(merged);
+    setIncomeInput(String(merged.income||""));
+    setBudgetInputs(Object.fromEntries(CATEGORIES.map(c=>[c.id, String(merged.budgets[c.id]||"")])));
+    setShowImport(false); setImportText("");
+    notify("已還原備份資料");
+  }
+  function importFromText() {
+    try {
+      const parsed = JSON.parse(importText);
+      applyImport(parsed);
+    } catch {
+      notify("貼上的內容無法解析，請確認格式","error");
+    }
+  }
+
+  // ── STATS helpers ───────────────────────────────────────────────────────────
+  const statsTx = statsRange==="month" ? thisMonthTx : data.transactions;
+  function sumByCat(catId) { return statsTx.filter(t=>t.category===catId).reduce((s,t)=>s+Number(t.amount),0); }
+  function sumByPay(payId) { return statsTx.filter(t=>t.payment===payId).reduce((s,t)=>s+Number(t.amount),0); }
+  const catStatsList = CATEGORIES.map(c=>({ ...c, total: sumByCat(c.id) })).filter(c=>c.total>0).sort((a,b)=>b.total-a.total);
+  const payStatsList = PAYMENT_METHODS.map(p=>({ ...p, total: sumByPay(p.id) })).filter(p=>p.total>0).sort((a,b)=>b.total-a.total);
+  const maxCatTotal = Math.max(1, ...catStatsList.map(c=>c.total));
+  const maxPayTotal = Math.max(1, ...payStatsList.map(p=>p.total));
 
   // ── STYLES ────────────────────────────────────────────────────────────────
   const css = `
@@ -271,6 +318,10 @@ export default function App() {
     .budget-setting-label{flex:1;font-size:14px}
     .budget-setting-input{width:110px;background:#13131a;border:1.5px solid #2a2a35;border-radius:10px;color:#fff;font-size:14px;font-family:'Noto Sans TC',sans-serif;padding:10px 12px;outline:none;text-align:right}
     .budget-setting-input:focus{border-color:#6366f1}
+    .backup-row{display:flex;gap:8px;margin-bottom:10px}
+    .textarea-import{width:100%;background:#13131a;border:1.5px solid #2a2a35;border-radius:10px;color:#fff;font-size:12px;font-family:monospace;padding:12px;outline:none;min-height:120px;margin-bottom:10px;resize:vertical}
+    .textarea-import:focus{border-color:#6366f1}
+    .hidden-file{display:none}
     /* History */
     .history-wrap{padding:20px}
     .history-title{font-size:22px;font-weight:900;margin-bottom:20px}
@@ -282,15 +333,30 @@ export default function App() {
     .history-stat{flex:1;background:#1c1c24;border-radius:14px;padding:14px;text-align:center}
     .history-stat-val{font-size:18px;font-weight:700}
     .history-stat-lbl{font-size:11px;color:#666;margin-top:3px}
+    /* Stats page */
+    .range-toggle{display:flex;background:#1c1c24;border-radius:12px;padding:4px;margin-bottom:18px}
+    .range-btn{flex:1;background:none;border:none;color:#888;font-size:13px;font-family:'Noto Sans TC',sans-serif;padding:10px;border-radius:9px;cursor:pointer;transition:all .15s}
+    .range-btn.active{background:#6366f1;color:#fff}
+    .stat-list-item{display:flex;align-items:center;gap:12px;padding:12px 0;border-bottom:1px solid #23232e;cursor:pointer}
+    .stat-list-item:last-child{border-bottom:none}
+    .stat-list-item:active{background:#23232e}
+    .stat-list-icon{width:36px;height:36px;border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:16px;flex-shrink:0}
+    .stat-list-info{flex:1;min-width:0}
+    .stat-list-name{font-size:14px;font-weight:500;margin-bottom:6px}
+    .stat-list-bar{height:6px;background:#2a2a35;border-radius:99px;overflow:hidden}
+    .stat-list-amt{font-size:14px;font-weight:700;flex-shrink:0;margin-left:8px}
+    .drill-summary{background:#1c1c24;border-radius:16px;padding:18px;margin-bottom:16px;text-align:center}
+    .drill-amt{font-size:28px;font-weight:900;margin-bottom:4px}
+    .drill-lbl{font-size:12px;color:#888}
     /* Nav */
     .nav{position:fixed;bottom:0;left:50%;transform:translateX(-50%);width:100%;max-width:430px;background:#13131a;border-top:1px solid #1c1c24;display:flex;padding:8px 0 20px}
-    .nav-btn{flex:1;display:flex;flex-direction:column;align-items:center;gap:3px;font-size:10px;color:#555;background:none;border:none;cursor:pointer;padding:6px 0;font-family:'Noto Sans TC',sans-serif;letter-spacing:.05em;transition:color .15s}
+    .nav-btn{flex:1;display:flex;flex-direction:column;align-items:center;gap:3px;font-size:9px;color:#555;background:none;border:none;cursor:pointer;padding:6px 0;font-family:'Noto Sans TC',sans-serif;letter-spacing:.03em;transition:color .15s}
     .nav-btn.active{color:#6366f1}
     .nav-btn.add-btn{color:#6366f1}
-    .nav-icon{font-size:22px}
-    .nav-add-circle{width:44px;height:44px;background:#6366f1;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:24px;color:#fff;box-shadow:0 2px 12px rgba(99,102,241,.45);margin-bottom:1px}
+    .nav-icon{font-size:20px}
+    .nav-add-circle{width:40px;height:40px;background:#6366f1;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:22px;color:#fff;box-shadow:0 2px 12px rgba(99,102,241,.45);margin-bottom:1px}
     /* Notif */
-    .notif{position:fixed;top:20px;left:50%;transform:translateX(-50%);background:#22c55e;color:#fff;border-radius:99px;padding:10px 22px;font-size:14px;font-weight:600;z-index:999;animation:slideIn .2s ease;white-space:nowrap}
+    .notif{position:fixed;top:20px;left:50%;transform:translateX(-50%);background:#22c55e;color:#fff;border-radius:99px;padding:10px 22px;font-size:14px;font-weight:600;z-index:999;animation:slideIn .2s ease;white-space:nowrap;max-width:90%;text-align:center}
     .notif.error{background:#ef4444}.notif.warn{background:#f59e0b}
     @keyframes slideIn{from{opacity:0;transform:translateX(-50%) translateY(-10px)}to{opacity:1;transform:translateX(-50%) translateY(0)}}
     .back-btn{background:none;border:none;color:#888;font-size:15px;font-family:'Noto Sans TC',sans-serif;cursor:pointer;padding:0;display:flex;align-items:center;gap:6px;margin-bottom:20px}
@@ -305,6 +371,9 @@ export default function App() {
       </button>
       <button className={`nav-btn${active==="home"?" active":""}`} onClick={()=>setPage("home")}>
         <span className="nav-icon">🏠</span>首頁
+      </button>
+      <button className={`nav-btn${active==="stats"?" active":""}`} onClick={()=>{setStatsDrill(null);setPage("stats");}}>
+        <span className="nav-icon">📊</span>統計
       </button>
       <button className={`nav-btn${active==="history"?" active":""}`} onClick={()=>{ const ms=allMonths(data.transactions); setHistoryMonth(ms[0]||curMonth()); setPage("history"); }}>
         <span className="nav-icon">📅</span>歷史
@@ -374,7 +443,7 @@ export default function App() {
       <div className="app"><style>{css}</style>
         {notification && <div className={`notif ${notification.type}`}>{notification.msg}</div>}
         <div className="add-wrap">
-          <button className="back-btn" onClick={()=>{setPage(editId?"home":"home");setEditId(null);}}>← 返回</button>
+          <button className="back-btn" onClick={()=>{setPage("home");setEditId(null);}}>← 返回</button>
           <div className="add-title">{editId?"編輯支出":"記一筆支出"}</div>
 
           <div className="lbl">金額</div>
@@ -426,8 +495,8 @@ export default function App() {
           {showHint && (
             <div className={`budget-warn-box${isOver?" over":""}`}>
               {isOver
-                ? `⚠️ 記完後 ${selCat.label.split(" ")[1]} 將超支 ${fmt(preview-selBudget)}`
-                : `注意：記完後 ${selCat.label.split(" ")[1]} 預算將用掉 ${budgetPct.toFixed(0)}%`}
+                ? `⚠️ 記完後 ${selCat.label.split(" ")[1]} 將為 ${fmt(preview)} / ${fmt(selBudget)}（超支 ${fmt(preview-selBudget)}）`
+                : `注意：記完後 ${selCat.label.split(" ")[1]} 將為 ${fmt(preview)} / ${fmt(selBudget)}（${budgetPct.toFixed(0)}%）`}
             </div>
           )}
 
@@ -445,6 +514,83 @@ export default function App() {
             </div>
           )}
         </div>
+      </div>
+    );
+  }
+
+  // ── STATS ─────────────────────────────────────────────────────────────────
+  if (page==="stats") {
+    // Drill-down view
+    if (statsDrill) {
+      const isCat = statsDrill.type==="cat";
+      const info = isCat ? getCatInfo(statsDrill.id) : getPayInfo(statsDrill.id);
+      const drillTx = statsTx.filter(t => isCat ? t.category===statsDrill.id : t.payment===statsDrill.id);
+      const drillTotal = drillTx.reduce((s,t)=>s+Number(t.amount),0);
+      return (
+        <div className="app"><style>{css}</style>
+          {notification && <div className={`notif ${notification.type}`}>{notification.msg}</div>}
+          <div className="history-wrap">
+            <button className="back-btn" onClick={()=>setStatsDrill(null)}>← 返回統計</button>
+            <div className="drill-summary">
+              <div className="drill-amt">{fmt(drillTotal)}</div>
+              <div className="drill-lbl">{info.label}　·　{statsRange==="month"?monthLabel(thisMonth):"總計"}　·　{drillTx.length} 筆</div>
+            </div>
+            <div className="card" style={{padding:"4px 16px"}}>
+              <TxList txList={drillTx} />
+            </div>
+          </div>
+          <Nav active="stats" />
+        </div>
+      );
+    }
+
+    return (
+      <div className="app"><style>{css}</style>
+        {notification && <div className={`notif ${notification.type}`}>{notification.msg}</div>}
+        <div className="header">
+          <div style={{fontSize:13,color:"#888",letterSpacing:"0.1em"}}>統計</div>
+        </div>
+        <div className="content">
+          <div className="range-toggle">
+            <button className={`range-btn${statsRange==="month"?" active":""}`} onClick={()=>setStatsRange("month")}>本月</button>
+            <button className={`range-btn${statsRange==="all"?" active":""}`} onClick={()=>setStatsRange("all")}>總計</button>
+          </div>
+
+          <div className="section-title">各分類累積金額</div>
+          <div className="card" style={{padding:"4px 16px",marginBottom:20}}>
+            {catStatsList.length===0 && <div className="empty">沒有資料</div>}
+            {catStatsList.map(c=>(
+              <div key={c.id} className="stat-list-item" onClick={()=>setStatsDrill({type:"cat",id:c.id})}>
+                <div className="stat-list-icon" style={{background:c.color+"22"}}>{c.label.split(" ")[0]}</div>
+                <div className="stat-list-info">
+                  <div className="stat-list-name">{c.label.split(" ")[1]}</div>
+                  <div className="stat-list-bar">
+                    <div className="bar-fill" style={{width:`${(c.total/maxCatTotal)*100}%`,background:c.color}} />
+                  </div>
+                </div>
+                <div className="stat-list-amt">{fmt(c.total)}</div>
+              </div>
+            ))}
+          </div>
+
+          <div className="section-title">各付款方式累積金額</div>
+          <div className="card" style={{padding:"4px 16px"}}>
+            {payStatsList.length===0 && <div className="empty">沒有資料</div>}
+            {payStatsList.map(p=>(
+              <div key={p.id} className="stat-list-item" onClick={()=>setStatsDrill({type:"pay",id:p.id})}>
+                <div className="stat-list-icon" style={{background:p.excludeFromFree?"#f59e0b22":"#6366f122"}}>{p.label.split(" ")[0]}</div>
+                <div className="stat-list-info">
+                  <div className="stat-list-name">{p.label.split(" ")[1]}</div>
+                  <div className="stat-list-bar">
+                    <div className="bar-fill" style={{width:`${(p.total/maxPayTotal)*100}%`,background:p.excludeFromFree?"#f59e0b":"#6366f1"}} />
+                  </div>
+                </div>
+                <div className="stat-list-amt">{fmt(p.total)}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+        <Nav active="stats" />
       </div>
     );
   }
@@ -548,6 +694,29 @@ export default function App() {
           </div>
         ))}
         <button className="btn-sm" style={{width:"100%",marginTop:14}} onClick={saveBudgets}>儲存預算設定</button>
+
+        <div className="divider" />
+
+        <div className="section-title">資料備份</div>
+        <div style={{fontSize:12,color:"#555",marginBottom:14}}>建議定期匯出備份，換手機時可用來還原資料</div>
+        <div className="backup-row">
+          <button className="btn-sm" style={{flex:1}} onClick={exportData}>📤 匯出備份檔案</button>
+          <button className="btn-sm" style={{flex:1,background:"#2a2a35"}} onClick={()=>fileInputRef.current?.click()}>📥 匯入檔案</button>
+        </div>
+        <input ref={fileInputRef} type="file" accept=".json,application/json" className="hidden-file" onChange={handleFileImport} />
+        {!showImport ? (
+          <button className="btn-outline" onClick={()=>setShowImport(true)}>或貼上備份文字內容</button>
+        ) : (
+          <>
+            <textarea className="textarea-import" placeholder="貼上之前匯出的 JSON 內容..."
+              value={importText} onChange={e=>setImportText(e.target.value)} />
+            <div className="inline-row">
+              <button className="btn-sm" style={{flex:1}} onClick={importFromText}>還原資料</button>
+              <button className="btn-sm" style={{background:"#2a2a35"}} onClick={()=>{setShowImport(false);setImportText("");}}>取消</button>
+            </div>
+          </>
+        )}
+
         <div className="divider" />
         <button className="btn-danger" onClick={()=>{
           if(window.confirm("確定要清除所有記錄嗎？")){setData(d=>({...d,transactions:[]}));notify("已清除所有記錄");}
@@ -598,7 +767,7 @@ export default function App() {
                     <div className="budget-header">
                       <span className="budget-cat">{c.label}</span>
                       <span className={`budget-nums${over?" over":""}`}>
-                        {over?`超支 ${fmt(sp-bgt)}`:`${fmt(sp)} / ${fmt(bgt)}`}
+                        {fmt(sp)} / {fmt(bgt)}{over?`（超支 ${fmt(sp-bgt)}）`:""}
                       </span>
                     </div>
                     <div className="bar-thin">
