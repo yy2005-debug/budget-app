@@ -222,8 +222,8 @@ export default function App() {
   function sumByPay(payId) { return statsTx.filter(t=>t.payment===payId).reduce((s,t)=>s+Number(t.amount),0); }
   const catStatsList = CATEGORIES.map(c=>({ ...c, total: sumByCat(c.id) })).filter(c=>c.total>0).sort((a,b)=>b.total-a.total);
   const payStatsList = PAYMENT_METHODS.map(p=>({ ...p, total: sumByPay(p.id) })).filter(p=>p.total>0).sort((a,b)=>b.total-a.total);
-  const maxCatTotal = Math.max(1, ...catStatsList.map(c=>c.total));
-  const maxPayTotal = Math.max(1, ...payStatsList.map(p=>p.total));
+  const statsGrandTotal = statsTx.reduce((s,t)=>s+Number(t.amount),0);
+  const pctOf = total => statsGrandTotal>0 ? Math.round(total/statsGrandTotal*100) : 0;
 
   // ── STYLES ────────────────────────────────────────────────────────────────
   const css = `
@@ -271,6 +271,9 @@ export default function App() {
     .tx-amount.excluded{color:#f59e0b}
     .tx-del{background:none;border:none;color:#333;font-size:16px;cursor:pointer;padding:4px 8px;flex-shrink:0}
     .tx-del:active{color:#ef4444}
+    .date-divider{display:flex;align-items:center;gap:8px;padding:10px 0 4px}
+    .date-divider-line{flex:1;height:1px;background:#23232e}
+    .date-divider-label{font-size:10px;color:#444;white-space:nowrap;flex-shrink:0}
     .empty{text-align:center;color:#555;font-size:14px;padding:30px 0}
     /* Add/Edit */
     .add-wrap{padding:20px}
@@ -385,31 +388,51 @@ export default function App() {
   );
 
   // ── TX LIST (shared) ──────────────────────────────────────────────────────
-  const TxList = ({ txList }) => (
-    <>
-      {txList.length===0 && <div className="empty">沒有記錄</div>}
-      {txList.map(tx => {
-        const cat = getCatInfo(tx.category);
-        const pay = getPayInfo(tx.payment);
-        const excluded = pay.excludeFromFree;
-        const label = tx.sub ? tx.sub : (tx.note||cat.label.split(" ")[1]);
-        const extra = tx.sub && tx.note ? ` · ${tx.note}` : "";
-        return (
-          <div key={tx.id} className="tx-item" onClick={()=>openEdit(tx)}>
-            <div className="tx-icon" style={{background:cat.color+"22"}}>{cat.label.split(" ")[0]}</div>
-            <div className="tx-info">
-              <div className="tx-note">{label}{extra}</div>
-              <div className="tx-meta">{tx.date}　{pay.label}</div>
-            </div>
-            <div className="tx-right">
-              <div className={`tx-amount${excluded?" excluded":""}`}>−{fmt(tx.amount)}</div>
-            </div>
-            <button className="tx-del" onClick={e=>{e.stopPropagation();deleteTx(tx.id);}}>✕</button>
+  const TxList = ({ txList }) => {
+    if (txList.length===0) return <div className="empty">沒有記錄</div>;
+    const groups = [];
+    let lastDate = null;
+    txList.forEach(tx => {
+      if (tx.date !== lastDate) { groups.push({ date: tx.date, items: [] }); lastDate = tx.date; }
+      groups[groups.length-1].items.push(tx);
+    });
+    const fmtDate = d => { const [,m,dd]=d.split("-"); return `${parseInt(m)}/${parseInt(dd)}`; };
+    return (
+      <>
+        {groups.map((g, gi) => (
+          <div key={g.date}>
+            {gi>0 && (
+              <div className="date-divider">
+                <div className="date-divider-line" />
+                <span className="date-divider-label">{fmtDate(g.date)}</span>
+                <div className="date-divider-line" />
+              </div>
+            )}
+            {g.items.map(tx => {
+              const cat = getCatInfo(tx.category);
+              const pay = getPayInfo(tx.payment);
+              const excluded = pay.excludeFromFree;
+              const label = tx.sub ? tx.sub : (tx.note||cat.label.split(" ")[1]);
+              const extra = tx.sub && tx.note ? ` · ${tx.note}` : "";
+              return (
+                <div key={tx.id} className="tx-item" onClick={()=>openEdit(tx)}>
+                  <div className="tx-icon" style={{background:cat.color+"22"}}>{cat.label.split(" ")[0]}</div>
+                  <div className="tx-info">
+                    <div className="tx-note">{label}{extra}</div>
+                    <div className="tx-meta">{tx.date}　{pay.label}</div>
+                  </div>
+                  <div className="tx-right">
+                    <div className={`tx-amount${excluded?" excluded":""}`}>−{fmt(tx.amount)}</div>
+                  </div>
+                  <button className="tx-del" onClick={e=>{e.stopPropagation();deleteTx(tx.id);}}>✕</button>
+                </div>
+              );
+            })}
           </div>
-        );
-      })}
-    </>
-  );
+        ))}
+      </>
+    );
+  };
 
   // ── SETUP ─────────────────────────────────────────────────────────────────
   if (page==="setup") return (
@@ -565,10 +588,10 @@ export default function App() {
                 <div className="stat-list-info">
                   <div className="stat-list-name">{c.label.split(" ")[1]}</div>
                   <div className="stat-list-bar">
-                    <div className="bar-fill" style={{width:`${(c.total/maxCatTotal)*100}%`,background:c.color}} />
+                    <div className="bar-fill" style={{width:`${pctOf(c.total)}%`,background:c.color}} />
                   </div>
                 </div>
-                <div className="stat-list-amt">{fmt(c.total)}</div>
+                <div className="stat-list-amt"><span style={{fontSize:11,color:"#888",marginRight:4}}>{pctOf(c.total)}%</span>{fmt(c.total)}</div>
               </div>
             ))}
           </div>
@@ -582,10 +605,10 @@ export default function App() {
                 <div className="stat-list-info">
                   <div className="stat-list-name">{p.label.split(" ")[1]}</div>
                   <div className="stat-list-bar">
-                    <div className="bar-fill" style={{width:`${(p.total/maxPayTotal)*100}%`,background:p.excludeFromFree?"#f59e0b":"#6366f1"}} />
+                    <div className="bar-fill" style={{width:`${pctOf(p.total)}%`,background:p.excludeFromFree?"#f59e0b":"#6366f1"}} />
                   </div>
                 </div>
-                <div className="stat-list-amt">{fmt(p.total)}</div>
+                <div className="stat-list-amt"><span style={{fontSize:11,color:"#888",marginRight:4}}>{pctOf(p.total)}%</span>{fmt(p.total)}</div>
               </div>
             ))}
           </div>
